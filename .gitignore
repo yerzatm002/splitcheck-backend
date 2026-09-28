@@ -6,3 +6,5 @@ splitcheck.db
 .idea/
 .vscode/
 .DS_Store
+# Downloaded during Render build; do not commit model binaries.
+ocr_models/

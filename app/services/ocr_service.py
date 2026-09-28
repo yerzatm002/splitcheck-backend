@@ -1,5 +1,6 @@
 from functools import lru_cache
 import logging
+from pathlib import Path
 import time
 
 import cv2
@@ -12,12 +13,35 @@ logger = logging.getLogger(__name__)
 # 1.8K on the longest side is a good speed/accuracy balance for phone receipt photos.
 OCR_MAX_SIDE = 1800
 OCR_MIN_SIDE = 1100
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODEL_ROOT = PROJECT_ROOT / "ocr_models"
+DET_MODEL_DIR = MODEL_ROOT / "det"
+REC_MODEL_DIR = MODEL_ROOT / "rec"
+
+
+def _model_ready(path: Path) -> bool:
+    return path.exists() and (
+        any(path.glob("*.pdmodel"))
+        or any(path.glob("*.pdiparams"))
+        or any(path.glob("inference.json"))
+    )
 
 
 @lru_cache(maxsize=1)
 def get_ocr_engine():
-    """Create PaddleOCR once per backend process and reuse it for every scan."""
+    """Create PaddleOCR once per backend process and reuse it for every scan.
+
+    On Render, the detector and recognizer are downloaded during the build into
+    ``ocr_models/``. This prevents a user's first scan from waiting for PaddleOCR
+    model downloads. We intentionally do not use the angle classifier.
+    """
     from paddleocr import PaddleOCR
+
+    if not _model_ready(DET_MODEL_DIR) or not _model_ready(REC_MODEL_DIR):
+        raise RuntimeError(
+            "OCR model files are missing. Run `python scripts/preload_ocr.py` "
+            "before starting the service."
+        )
 
     started = time.perf_counter()
     engine = PaddleOCR(
@@ -25,8 +49,15 @@ def get_ocr_engine():
         lang="latin",
         show_log=False,
         det_limit_side_len=OCR_MAX_SIDE,
+        det_model_dir=str(DET_MODEL_DIR),
+        rec_model_dir=str(REC_MODEL_DIR),
     )
-    logger.info("PaddleOCR initialized in %.2fs", time.perf_counter() - started)
+    logger.info(
+        "PaddleOCR initialized from preloaded models in %.2fs (det=%s, rec=%s)",
+        time.perf_counter() - started,
+        DET_MODEL_DIR,
+        REC_MODEL_DIR,
+    )
     return engine
 
 
@@ -40,19 +71,15 @@ def preprocess_image(image_bytes: bytes) -> np.ndarray:
     h, w = image.shape[:2]
     longest = max(h, w)
 
-    # Large mobile photos are the main OCR performance bottleneck. Shrink them early.
     if longest > OCR_MAX_SIDE:
         scale = OCR_MAX_SIDE / longest
         image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    # Only modestly enlarge genuinely small images; never blow them up to 2600+ px.
     elif longest < OCR_MIN_SIDE:
         scale = min(1.35, OCR_MIN_SIDE / longest)
         if scale > 1.05:
             image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    # Thermal receipts benefit from light local contrast enhancement. Keep processing cheap.
     clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
 
@@ -73,8 +100,6 @@ def recognize_receipt(image_bytes: bytes) -> dict:
     ocr = get_ocr_engine()
 
     infer_started = time.perf_counter()
-    # Angle classification is intentionally disabled for speed. The mobile UI asks for an
-    # upright receipt, while Paddle's detector still handles small natural skew.
     result = ocr.ocr(image, cls=False)
     logger.info("PaddleOCR inference finished in %.2fs", time.perf_counter() - infer_started)
 

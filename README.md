@@ -152,3 +152,13 @@ Example body:
 ## Important MVP limitation
 
 The Italian receipt parser is heuristic. It handles common labels such as `TOTALE COMPLESSIVO`, `IVA`, `PAGAMENTO`, `RESTO`, prices with decimal comma, and basic weighted products. Real receipts vary significantly, so the UI must always allow manual correction after OCR.
+
+## OCR model setup
+
+Before the first local OCR test, download the detector and Latin recognizer once:
+
+```bat
+python scripts\preload_ocr.py
+```
+
+Render does this automatically during its build. Runtime receipt requests never need to download PaddleOCR model files.

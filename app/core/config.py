@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     environment: str = "development"
     initial_user_password: str = "SplitCheck2026!"
+    preload_ocr_on_startup: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
