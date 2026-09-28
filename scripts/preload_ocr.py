@@ -18,6 +18,10 @@ MODELS = {
         "url": "https://paddleocr.bj.bcebos.com/PP-OCRv3/multilingual/latin_PP-OCRv3_rec_infer.tar",
         "dirname": "latin_PP-OCRv3_rec_infer",
     },
+    "cls": {
+        "url": "https://paddleocr.bj.bcebos.com/dygraph_v2.0/ch/ch_ppocr_mobile_v2.0_cls_infer.tar",
+        "dirname": "ch_ppocr_mobile_v2.0_cls_infer",
+    },
 }
 
 

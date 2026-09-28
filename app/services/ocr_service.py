@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODEL_ROOT = PROJECT_ROOT / "ocr_models"
 DET_MODEL_DIR = MODEL_ROOT / "det"
 REC_MODEL_DIR = MODEL_ROOT / "rec"
+CLS_MODEL_DIR = MODEL_ROOT / "cls"
 
 
 def _model_ready(path: Path) -> bool:
@@ -31,13 +32,19 @@ def _model_ready(path: Path) -> bool:
 def get_ocr_engine():
     """Create PaddleOCR once per backend process and reuse it for every scan.
 
-    On Render, the detector and recognizer are downloaded during the build into
-    ``ocr_models/``. This prevents a user's first scan from waiting for PaddleOCR
-    model downloads. We intentionally do not use the angle classifier.
+    On Render, detector, recognizer, and classifier model files are downloaded
+    during the build into ``ocr_models/``. PaddleOCR 2.x may resolve/download the
+    classifier at construction time even when angle classification is disabled,
+    so we provide a local classifier directory too. Runtime inference still uses
+    ``cls=False`` and therefore does not run angle classification.
     """
     from paddleocr import PaddleOCR
 
-    if not _model_ready(DET_MODEL_DIR) or not _model_ready(REC_MODEL_DIR):
+    if (
+        not _model_ready(DET_MODEL_DIR)
+        or not _model_ready(REC_MODEL_DIR)
+        or not _model_ready(CLS_MODEL_DIR)
+    ):
         raise RuntimeError(
             "OCR model files are missing. Run `python scripts/preload_ocr.py` "
             "before starting the service."
@@ -51,12 +58,14 @@ def get_ocr_engine():
         det_limit_side_len=OCR_MAX_SIDE,
         det_model_dir=str(DET_MODEL_DIR),
         rec_model_dir=str(REC_MODEL_DIR),
+        cls_model_dir=str(CLS_MODEL_DIR),
     )
     logger.info(
-        "PaddleOCR initialized from preloaded models in %.2fs (det=%s, rec=%s)",
+        "PaddleOCR initialized from preloaded models in %.2fs (det=%s, rec=%s, cls=%s)",
         time.perf_counter() - started,
         DET_MODEL_DIR,
         REC_MODEL_DIR,
+        CLS_MODEL_DIR,
     )
     return engine
 

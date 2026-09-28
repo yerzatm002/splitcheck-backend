@@ -90,3 +90,8 @@ Then start FastAPI normally:
 ```bat
 uvicorn app.main:app --reload
 ```
+
+
+## OCR runtime-download guard
+
+The Render build preloads detector, Latin recognizer, and classifier model files into `ocr_models/`. The classifier is preloaded only because PaddleOCR 2.x may resolve it during engine construction even when angle classification is disabled. Runtime OCR still calls `ocr(..., cls=False)`, so the classifier is not executed. After deployment, normal receipt requests must not contain `download https://paddleocr...` in runtime logs.
