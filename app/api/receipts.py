@@ -1,5 +1,6 @@
 from decimal import Decimal
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -211,8 +212,13 @@ async def ocr_receipt(receipt_id: int, file: UploadFile = File(...), db: Session
     if len(data) > 12 * 1024 * 1024:
         raise HTTPException(413, "Image is too large (max 12 MB)")
 
+    receipt.ocr_status = "PROCESSING"
+    db.commit()
+
     try:
-        parsed = recognize_receipt(data)
+        # OCR is CPU-bound. Run it outside FastAPI's event loop so health/API requests
+        # remain responsive while PaddleOCR works.
+        parsed = await run_in_threadpool(recognize_receipt, data)
     except Exception as exc:
         receipt.ocr_status = "FAILED"
         db.commit()

@@ -131,3 +131,9 @@ Then redeploy/restart the Render service.
 ## 5. Important OCR note
 
 PaddleOCR is lazy-loaded on the first OCR request. The first scan can therefore be much slower than subsequent scans. PaddlePaddle/OpenCV are also memory-heavy compared with a normal FastAPI API. If a very small Render instance is terminated for memory use, move OCR to a larger instance or a separate OCR worker/service; the REST API contract can remain unchanged.
+
+## OCR performance notes
+
+The production build now limits receipt images to about 1800 px on the longest side, reuses one PaddleOCR instance per process, disables the angle-classification pass, and runs OCR in FastAPI's thread pool. The frontend also compresses phone photos before upload.
+
+For diagnosis, Render logs now include preprocessing, model initialization, inference, and total OCR timings.
