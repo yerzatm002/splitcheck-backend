@@ -20,7 +20,7 @@ from app.schemas.receipt import (
     ReceiptSummary,
     SplitRequest,
 )
-from app.services.receipt_parser import parse_italian_receipt_text
+from app.services.receipt_parser import parse_italian_receipt, parse_italian_receipt_text
 from app.services.split_service import split_cents_evenly
 
 router = APIRouter(prefix="/receipts", tags=["receipts"])
@@ -220,10 +220,28 @@ def parse_browser_ocr(
     db.commit()
 
     try:
-        parsed = parse_italian_receipt_text(
-            payload.raw_text,
-            default_confidence=payload.confidence if payload.confidence is not None else 0.75,
-        )
+        if payload.tokens:
+            spatial_tokens = [
+                {
+                    "text": token.text,
+                    "confidence": token.confidence,
+                    "box": [
+                        [token.x0, token.y0],
+                        [token.x1, token.y0],
+                        [token.x1, token.y1],
+                        [token.x0, token.y1],
+                    ],
+                }
+                for token in payload.tokens
+            ]
+            parsed = parse_italian_receipt(spatial_tokens)
+            # Keep Tesseract's original text for debugging/review.
+            parsed["raw_text"] = payload.raw_text
+        else:
+            parsed = parse_italian_receipt_text(
+                payload.raw_text,
+                default_confidence=payload.confidence if payload.confidence is not None else 0.75,
+            )
     except Exception as exc:
         receipt.ocr_status = "FAILED"
         db.commit()

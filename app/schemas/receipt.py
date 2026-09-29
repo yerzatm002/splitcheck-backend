@@ -88,9 +88,19 @@ class ReceiptSummary(BaseModel):
     participants: list[ParticipantSummary]
 
 
+class OCRTokenIn(BaseModel):
+    text: str = Field(min_length=1, max_length=300)
+    confidence: float = Field(default=0.75, ge=0, le=1)
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
 class OCRTextRequest(BaseModel):
     raw_text: str = Field(min_length=1, max_length=50000)
     confidence: float | None = Field(default=None, ge=0, le=1)
+    tokens: list[OCRTokenIn] | None = None
 
 
 class OCRItem(BaseModel):

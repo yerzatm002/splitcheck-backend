@@ -133,6 +133,92 @@ def _group_tokens_into_rows(tokens: list[dict[str, Any]]) -> list[dict[str, Any]
     return rows
 
 
+
+
+def _find_column_bounds(rows: list[dict[str, Any]]) -> dict[str, float] | None:
+    """Infer the printed receipt columns from the DESCRIZIONE / IVA / PREZZO header.
+
+    Tesseract can see pale logos/bleed-through as words. Restricting product names to the
+    physical description column removes most of that noise without a store-specific list.
+    """
+    for row in rows[:30]:
+        tokens = row.get("tokens") or []
+        if not tokens:
+            continue
+        desc_tokens = [t for t in tokens if re.search(r"descr", t.get("text", ""), re.I)]
+        iva_tokens = [t for t in tokens if re.fullmatch(r"i?v?a?", re.sub(r"[^A-Za-z]", "", t.get("text", "")), re.I) and len(re.sub(r"[^A-Za-z]", "", t.get("text", ""))) >= 2]
+        price_tokens = [t for t in tokens if re.search(r"prezz|price", t.get("text", ""), re.I)]
+        if desc_tokens and (iva_tokens or price_tokens):
+            desc_left = min(t["x1"] for t in desc_tokens)
+            if iva_tokens:
+                iva_left = min(t["x1"] for t in iva_tokens)
+            else:
+                iva_left = min(t["x1"] for t in price_tokens) * 0.80
+            price_left = min((t["x1"] for t in price_tokens), default=iva_left + 1)
+            if iva_left > desc_left:
+                return {"desc_left": desc_left, "iva_left": iva_left, "price_left": price_left}
+    return None
+
+
+def _clean_description_tokens(tokens: list[dict[str, Any]], columns: dict[str, float] | None) -> str:
+    selected = list(tokens)
+    if columns:
+        left = columns["desc_left"] - 18
+        right = columns["iva_left"] + 12
+        selected = [t for t in selected if t.get("cx", (t.get("x1", 0) + t.get("x2", 0)) / 2) >= left and t.get("x1", 0) < right]
+
+    # Extremely low-confidence isolated tokens are usually paper logos/bleed-through.
+    if len(selected) > 2:
+        stronger = [t for t in selected if float(t.get("confidence", 0)) >= 0.32]
+        if stronger:
+            selected = stronger
+
+    text = " ".join(t.get("text", "").strip() for t in selected if t.get("text", "").strip())
+    text = _description_without_columns(text)
+
+    # Trim tiny edge fragments frequently produced by watermarks (e.g. "i VA NI ...").
+    parts = text.split()
+    while parts and (len(re.sub(r"[^A-Za-z0-9]", "", parts[0])) <= 2):
+        parts.pop(0)
+    while parts and (len(re.sub(r"[^A-Za-z0-9]", "", parts[-1])) <= 2):
+        parts.pop()
+    text = " ".join(parts)
+    return re.sub(r"\s+", " ", text).strip(" -.:;|_\\/")
+
+
+def _extract_article_count(rows: list[dict[str, Any]]) -> int | None:
+    for row in rows:
+        text = row.get("text", "")
+        m = re.search(r"\barticoli\D{0,5}(\d{1,3})\b", text, re.I)
+        if m:
+            value = int(m.group(1))
+            if 1 <= value <= 300:
+                return value
+    return None
+
+
+def _trim_items_using_receipt_controls(items: list[dict[str, Any]], total_cents: int, article_count: int | None) -> list[dict[str, Any]]:
+    """Drop service/footer lines that accidentally look like products.
+
+    We only trim on strong receipt controls: an exact printed item count or an exact prefix
+    sum equal to TOTALE COMPLESSIVO. This avoids guessing when discounts are present.
+    """
+    if article_count and len(items) >= article_count:
+        candidate = items[:article_count]
+        if not total_cents or sum(i["total_price_cents"] for i in candidate) == total_cents:
+            return candidate
+
+    if total_cents:
+        running = 0
+        for idx, item in enumerate(items):
+            running += item["total_price_cents"]
+            if running == total_cents:
+                return items[:idx + 1]
+            if running > total_cents:
+                break
+    return items
+
+
 def _extract_total_from_rows(rows: list[dict[str, Any]]) -> int:
     for index, row in enumerate(rows):
         text = row["text"]
@@ -219,6 +305,7 @@ def _weight_matches_total(weight: Decimal, unit_price_cents: int, total_cents: i
 def _parse_spatial_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     start, end = _find_item_section(rows)
     items: list[dict[str, Any]] = []
+    columns = _find_column_bounds(rows)
 
     # Weight metadata belongs to the NEXT actual product row on the IN'S receipts we target.
     pending_weight: Decimal | None = None
@@ -294,11 +381,11 @@ def _parse_spatial_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     rightmost_price_token = token
                     break
             if rightmost_price_token is not None:
-                left_text = " ".join(
-                    t["text"] for t in row["tokens"]
+                left_tokens = [
+                    t for t in row["tokens"]
                     if t["x1"] < rightmost_price_token["x1"]
-                )
-                cleaner = _description_without_columns(left_text)
+                ]
+                cleaner = _clean_description_tokens(left_tokens, columns)
                 if cleaner:
                     description = cleaner
 
@@ -381,6 +468,7 @@ def parse_italian_receipt(tokens: list[dict[str, Any]]) -> dict:
     raw_text = "\n".join(row["text"] for row in rows)
     total_cents = _extract_total_from_rows(rows)
     items = _parse_spatial_items(rows)
+    items = _trim_items_using_receipt_controls(items, total_cents, _extract_article_count(rows))
 
     return {
         "store_name": _guess_store(rows),
@@ -418,10 +506,13 @@ def parse_italian_receipt_text(raw_text: str, default_confidence: float = 0.75) 
         if line
     ]
     normalized_text = "\n".join(row["text"] for row in rows)
+    total_cents = _extract_total_from_rows(rows)
+    items = _parse_spatial_items(rows)
+    items = _trim_items_using_receipt_controls(items, total_cents, _extract_article_count(rows))
     return {
         "store_name": _guess_store(rows),
         "currency": "EUR",
-        "total_cents": _extract_total_from_rows(rows),
-        "items": _parse_spatial_items(rows),
+        "total_cents": total_cents,
+        "items": items,
         "raw_text": normalized_text,
     }
