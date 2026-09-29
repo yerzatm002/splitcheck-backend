@@ -59,7 +59,7 @@ class ReceiptItem(Base):
     quantity: Mapped[Decimal] = mapped_column(Numeric(10, 3), default=1)
     unit: Mapped[str] = mapped_column(String(20), default="pcs")
     unit_price_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    total_price_cents: Mapped[int] = mapped_column(Integer)
+    total_price_cents: Mapped[int] = mapped_column(Integer, nullable=True)
     ocr_confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
