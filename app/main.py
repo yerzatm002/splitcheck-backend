@@ -7,22 +7,17 @@ from app.api import auth, receipts, users
 from app.core.config import settings
 from app.db.init_db import init_db
 from app.db.session import engine
-from app.services.ocr_service import get_ocr_engine
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    if settings.preload_ocr_on_startup:
-        # Models were downloaded at build time. Loading the engine here shifts
-        # model initialization out of the first user scan.
-        get_ocr_engine()
     yield
 
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",

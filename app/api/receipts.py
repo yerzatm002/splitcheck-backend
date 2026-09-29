@@ -1,6 +1,5 @@
 from decimal import Decimal
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.concurrency import run_in_threadpool
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -9,6 +8,7 @@ from app.db.session import get_db
 from app.models import ItemSplit, Participant, Receipt, ReceiptItem, User
 from app.schemas.receipt import (
     OCRResponse,
+    OCRTextRequest,
     ParticipantCreate,
     ParticipantOut,
     ParticipantSummary,
@@ -20,7 +20,7 @@ from app.schemas.receipt import (
     ReceiptSummary,
     SplitRequest,
 )
-from app.services.ocr_service import recognize_receipt
+from app.services.receipt_parser import parse_italian_receipt_text
 from app.services.split_service import split_cents_evenly
 
 router = APIRouter(prefix="/receipts", tags=["receipts"])
@@ -200,36 +200,40 @@ def receipt_summary(receipt_id: int, db: Session = Depends(get_db), current_user
     )
 
 
-@router.post("/{receipt_id}/ocr", response_model=OCRResponse)
-async def ocr_receipt(receipt_id: int, file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+@router.post("/{receipt_id}/ocr-text", response_model=OCRResponse)
+def parse_browser_ocr(
+    receipt_id: int,
+    payload: OCRTextRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Parse OCR text produced in the browser by Tesseract.js.
+
+    No receipt image or ML inference runs on Render. This keeps the API lightweight
+    enough for small instances and avoids PaddleOCR model downloads/OOM restarts.
+    """
     receipt = db.scalar(select(Receipt).where(Receipt.id == receipt_id, Receipt.created_by == current_user.id))
     if not receipt:
         raise HTTPException(404, "Receipt not found")
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(400, "Please upload an image")
-
-    data = await file.read()
-    if len(data) > 12 * 1024 * 1024:
-        raise HTTPException(413, "Image is too large (max 12 MB)")
 
     receipt.ocr_status = "PROCESSING"
     db.commit()
 
     try:
-        # OCR is CPU-bound. Run it outside FastAPI's event loop so health/API requests
-        # remain responsive while PaddleOCR works.
-        parsed = await run_in_threadpool(recognize_receipt, data)
+        parsed = parse_italian_receipt_text(
+            payload.raw_text,
+            default_confidence=payload.confidence if payload.confidence is not None else 0.75,
+        )
     except Exception as exc:
         receipt.ocr_status = "FAILED"
         db.commit()
-        raise HTTPException(422, f"OCR failed: {exc}")
+        raise HTTPException(422, f"Receipt parsing failed: {exc}")
 
     receipt.store_name = parsed.get("store_name") or receipt.store_name
     receipt.total_amount_cents = parsed.get("total_cents") or receipt.total_amount_cents
     receipt.raw_ocr_text = parsed.get("raw_text")
     receipt.ocr_status = "DONE"
 
-    # Replace only OCR-created list for MVP. Do OCR before manual editing.
     db.execute(delete(ReceiptItem).where(ReceiptItem.receipt_id == receipt.id))
     for idx, item in enumerate(parsed["items"]):
         db.add(ReceiptItem(
@@ -246,18 +250,16 @@ async def ocr_receipt(receipt_id: int, file: UploadFile = File(...), db: Session
 
     return OCRResponse(
         store_name=parsed.get("store_name"),
-        currency="EUR",
+        currency=parsed.get("currency", "EUR"),
         total_cents=parsed.get("total_cents", 0),
-        items=[
-            {
-                "name": x["name"],
-                "quantity": x["quantity"],
-                "unit": x["unit"],
-                "unit_price_cents": x["unit_price_cents"],
-                "total_price_cents": x["total_price_cents"],
-                "confidence": x["confidence"],
-            }
-            for x in parsed["items"]
-        ],
+        items=parsed.get("items", []),
         raw_text=parsed.get("raw_text", ""),
+    )
+
+
+@router.post("/{receipt_id}/ocr", status_code=410)
+def legacy_server_ocr(receipt_id: int):
+    raise HTTPException(
+        410,
+        "Server-side OCR was removed. Use /ocr-text with browser-side Tesseract.js.",
     )

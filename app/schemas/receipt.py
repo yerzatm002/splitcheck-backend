@@ -88,6 +88,11 @@ class ReceiptSummary(BaseModel):
     participants: list[ParticipantSummary]
 
 
+class OCRTextRequest(BaseModel):
+    raw_text: str = Field(min_length=1, max_length=50000)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
 class OCRItem(BaseModel):
     name: str
     quantity: Decimal = Decimal("1")

@@ -401,3 +401,27 @@ def _guess_store(rows: list[dict[str, Any]]) -> str | None:
             if not any(x in low for x in ["p.iva", "via ", "corso "]):
                 return text
     return None
+
+
+def parse_italian_receipt_text(raw_text: str, default_confidence: float = 0.75) -> dict:
+    """Parse line-preserving OCR text produced by browser-side Tesseract.js.
+
+    Tesseract already returns receipt text in reading order. The existing parser mostly
+    operates on row text, so we adapt each non-empty OCR line to the same row structure
+    used by the spatial PaddleOCR parser. This keeps weighted-item, total and skip rules
+    in one place without running any ML model on the backend.
+    """
+    lines = [re.sub(r"\s+", " ", line).strip() for line in (raw_text or "").splitlines()]
+    rows = [
+        {"text": line, "confidence": float(default_confidence), "tokens": []}
+        for line in lines
+        if line
+    ]
+    normalized_text = "\n".join(row["text"] for row in rows)
+    return {
+        "store_name": _guess_store(rows),
+        "currency": "EUR",
+        "total_cents": _extract_total_from_rows(rows),
+        "items": _parse_spatial_items(rows),
+        "raw_text": normalized_text,
+    }
